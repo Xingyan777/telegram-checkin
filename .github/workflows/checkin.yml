@@ -1,0 +1,31 @@
+name: Telegram Auto Checkin
+
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 每天北京时间9点
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # 锁定 Telethon 版本：本地诊断(1.44.0)确认回调按钮 data 可读；
+      # 未锁版本会导致 Actions 装到不同版本、getattr(b,'data') 拿不到 → data_b64 全为 null → 误判走发送分支
+      - run: pip install telethon==1.44.0
+
+      - run: python -c "import telethon; print('Telethon version:', telethon.__version__)"
+
+      - name: 执行签到
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          SESSION_四惠东: ${{ secrets.SESSION_SIHUIDONG }}
+          SESSION_新星焉: ${{ secrets.SESSION_XINXINGYAN }}
+        run: python auto_run.py
