@@ -27,6 +27,94 @@ API_HASH = os.environ.get('TG_API_HASH', '')
 CONFIG_FILE = 'accounts_config.json'
 CHECKIN_FILE = 'checkin_targets.json'
 
+# ==================== 人机验证关键词防火墙 ====================
+# 目的：只把"确实是验证题"的消息交给 AI，避免无关消息误消耗 AI 额度。
+# 判定顺序：
+#   1) 反向关键词命中 → 直接拒绝（宣传文案/成功提示误含"验证"二字）
+#   2) 正向关键词命中 → 认定为验证题，交给 AI 判定
+#   3) 两者都不命中 → 拒绝
+# 可用环境变量覆盖（逗号或换行分隔）：
+#   FIREWALL_VERIFY_KEYWORDS / FIREWALL_DENY_KEYWORDS
+
+# 正向：出现任一即视为验证题候选
+VERIFY_TRIGGER_KEYWORDS = (
+    '验证', '请回答', '请选择', '请点击', '找不同', '序号',
+    '哪个是', '哪一个', '正确答案', '滑动验证', '人机',
+)
+
+# 反向：出现即判定为非验证消息（宣传/已成功/无需验证）
+VERIFY_DENY_KEYWORDS = (
+    '严格验证', '无需验证', '不需要验证', '今日已配给', '今日已领取',
+    '一键分享', '独家算法', '远超同行', '邀请好友', '已签到成功',
+)
+
+
+def _env_keywords(name, default):
+    """从环境变量读取关键词表，兼容逗号与换行分隔；为空时用默认值。"""
+    raw = os.environ.get(name, '')
+    if not raw.strip():
+        return tuple(default)
+    items = re.split(r'[,\n]', raw)
+    return tuple(x.strip() for x in items if x.strip())
+
+
+def answer_firewall(text):
+    """出站防火墙：校验 AI 产出的验证答案是否安全可发。
+
+    验证答案的正常形态非常有限：数字、序号、单个词语、短语（如"第三个"）。
+    出现以下情况一律拦下：
+      - 过长（> 40 字）——正常答案绝不会这么长
+      - 含换行——可能被拼成多条消息
+      - 含链接/URL——防止被诱导发送钓鱼链接
+      - 命中反向关键词——防止把宣传话术发进对话
+    环境变量 FIREWALL_MAX_ANSWER_LEN 可调整长度上限。
+    """
+    if not text:
+        return False, '空答案'
+    try:
+        max_len = int(os.environ.get('FIREWALL_MAX_ANSWER_LEN', '40'))
+    except (TypeError, ValueError):
+        max_len = 40
+
+    if len(text) > max_len:
+        return False, f'答案过长({len(text)}>{max_len})'
+    if '\n' in text:
+        return False, '答案含换行'
+    if re.search(r'(https?://|www\.|t\.me/)', text, re.I):
+        return False, '答案含链接'
+
+    denies = _env_keywords('FIREWALL_DENY_KEYWORDS', VERIFY_DENY_KEYWORDS)
+    deny_hits = [kw for kw in denies if kw in text]
+    if deny_hits:
+        return False, f'命中反向关键词 {deny_hits}'
+    return True, '通过'
+
+
+def verify_firewall(text):
+    """关键词防火墙：判断一条消息是否应进入 AI 验证流程。
+
+    返回 (passed: bool, reason: str)
+    passed=True  表示命中正向关键词且无反向命中，应交给 AI。
+    """
+    if not text:
+        return False, '空消息'
+    triggers = _env_keywords('FIREWALL_VERIFY_KEYWORDS', VERIFY_TRIGGER_KEYWORDS)
+    denies = _env_keywords('FIREWALL_DENY_KEYWORDS', VERIFY_DENY_KEYWORDS)
+
+    deny_hits = [kw for kw in denies if kw in text]
+    if deny_hits:
+        return False, f'命中反向关键词 {deny_hits}'
+
+    trigger_hits = [kw for kw in triggers if kw in text]
+    if not trigger_hits:
+        return False, '未命中正向关键词'
+
+    # 兼容原有规则："严格验证"且无"人机"字样 → 宣传语
+    if '严格验证' in text and '人机' not in text:
+        return False, '疑似宣传文案（严格验证且无人机字样）'
+
+    return True, f'命中正向关键词 {trigger_hits}'
+
 # ==================== AI 人机验证配置 ====================
 # 当签到机器人返回无法直接解析的验证（如"找不同"）时，调用 AI 判断要点哪个按钮
 AI_VERIFY_ENABLED = True
@@ -39,6 +127,28 @@ AI_VERIFY_TIMEOUT = 60  # 秒（图片型验证需要更长时间）
 # 自动签到状态
 auto_checkin_running = False
 auto_checkin_thread = None
+
+# 防火墙运行统计（每次签到结束时打印汇总）
+firewall_stats = {'blocked_in': 0, 'blocked_out': 0, 'passed': 0}
+
+
+def firewall_reset_stats():
+    firewall_stats['blocked_in'] = 0
+    firewall_stats['blocked_out'] = 0
+    firewall_stats['passed'] = 0
+
+
+def firewall_print_stats():
+    total = firewall_stats['blocked_in'] + firewall_stats['blocked_out'] + firewall_stats['passed']
+    if total == 0:
+        print('🛡️ 防火墙统计: 本轮未检测到任何候选验证消息')
+        return
+    print(
+        f"🛡️ 防火墙统计: 共评估 {total} 条 | "
+        f"放行 {firewall_stats['passed']} | "
+        f"入站拦截 {firewall_stats['blocked_in']} | "
+        f"出站拦截 {firewall_stats['blocked_out']}"
+    )
 
 def load_config():
     if os.path.exists(CONFIG_FILE):
@@ -518,6 +628,12 @@ def ai_ask_verification(msg, image_b64=None):
         action = str(obj.get('action', '')).strip().lower()
         text = str(obj.get('text', '')).strip()
         if action in ('click', 'reply') and text:
+            # ---- 出站防火墙：AI 给出的答案也要过一遍，防止把异常文本发进对话 ----
+            ok, reason = answer_firewall(text)
+            if not ok:
+                firewall_stats['blocked_out'] += 1
+                print(f"  🛡️ 出站拦截: {reason} | 内容: {text[:40]!r}")
+                return None
             return {'action': action, 'text': text}
         return None
     except Exception as e:
@@ -597,26 +713,19 @@ async def handle_verification(client, peer, remark='', resend_cmd=None, max_atte
     sent_resend = False
     processed_msg_ids = set()  # 已处理过的验证消息 ID，防止同一道题反复作答
 
-    # 非验证类消息的排除词（宣传文案/成功提示中恰好含"验证"二字的情况）
-    VERIFY_FALSE_POSITIVE_KEYWORDS = (
-        '严格验证', '今日已配给', '今日已领取', '一键分享',
-        '独家算法', '远超同行', '邀请好友',
-    )
-
     def is_real_verify_text(text):
-        """判断是否为真正的人机验证消息，排除宣传/成功文案"""
-        if '验证' not in text:
-            return False
-        if '无需验证' in text or '不需要验证' in text:
-            return False
-        # 命中多条非验证类关键词 → 大概率是宣传文案误触发
-        hit_count = sum(1 for kw in VERIFY_FALSE_POSITIVE_KEYWORDS if kw in text)
-        if hit_count >= 2:
-            return False
-        # "严格验证"单独出现且无"人机"字样 → 宣传语
-        if '严格验证' in text and '人机' not in text:
-            return False
-        return True
+        """判断是否为真正的人机验证消息 —— 交给关键词防火墙统一裁决。
+
+        规则与判定顺序见文件顶部 verify_firewall()：
+        反向关键词优先拒绝，再要求命中正向关键词。
+        """
+        passed, reason = verify_firewall(text)
+        if passed:
+            firewall_stats['passed'] += 1
+        else:
+            firewall_stats['blocked_in'] += 1
+            print(f"  🛡️ [{remark}] 入站拦截: {reason} | 文本: {text[:40]!r}")
+        return passed
 
     # 序列化一条消息为传给 AI 的 JSON（含文本、按钮文字、按钮 data 的 base64 与类型名）
     def serialize_msg(msg):
@@ -792,6 +901,7 @@ async def do_checkin():
     config = load_config()
     current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"\n[{current_time}] 开始执行签到...")
+    firewall_reset_stats()
     print("="*60)
     
     for session in sessions:
@@ -902,6 +1012,7 @@ async def do_checkin():
             print(f"❌ [{remark}] 签到失败: {e}")
     
     print("\n" + "="*60)
+    firewall_print_stats()
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 签到执行完毕")
 
 def auto_checkin_worker():
