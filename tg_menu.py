@@ -718,7 +718,13 @@ async def handle_verification(client, peer, remark='', resend_cmd=None, max_atte
 
         规则与判定顺序见文件顶部 verify_firewall()：
         反向关键词优先拒绝，再要求命中正向关键词。
+
+        例外：命中签到成功关键词的消息直接放行（不计入拦截）。
+        这类消息需要被后续的成功检测看到，防火墙不应吞掉它，
+        否则成功判定可能因为在过滤阶段就被丢弃而失效。
         """
+        if text and any(k in text for k in VERIFY_SUCCESS_KEYWORDS):
+            return False  # 不是验证题，但也不算被防火墙拦截
         passed, reason = verify_firewall(text)
         if passed:
             firewall_stats['passed'] += 1

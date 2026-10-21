@@ -14,7 +14,7 @@ source = open(SRC, encoding='utf-8').read()
 tree = ast.parse(source)
 
 WANT_FUNCS = {'_env_keywords', 'verify_firewall', 'answer_firewall'}
-WANT_ASSIGN = {'VERIFY_TRIGGER_KEYWORDS', 'VERIFY_DENY_KEYWORDS'}
+WANT_ASSIGN = {'VERIFY_TRIGGER_KEYWORDS', 'VERIFY_DENY_KEYWORDS', 'VERIFY_SUCCESS_KEYWORDS'}
 
 pieces = []
 found_funcs = set()
@@ -88,7 +88,26 @@ for text, expect, desc in outbound:
 
 print()
 print("=" * 66)
-total = len(inbound) + len(outbound)
+print("签到成功消息豁免（不应被防火墙吞掉，需供成功检测使用）")
+print("=" * 66)
+
+# 从源码抽取 is_real_verify_text 的等价逻辑：成功关键词优先豁免
+success_kws = ns.get('VERIFY_SUCCESS_KEYWORDS', ())
+
+success_cases = [
+    ("📅 **今日已签到**\n今日已获得 **4** 积分", "四惠东签到成功"),
+    ("⚠️ **今日已签到**\n下次签到 23小时21分钟", "下次签到提示"),
+    ("✅ 签到成功 +1 积分", "签到成功提示"),
+]
+for text, desc in success_cases:
+    hit = any(k in text for k in success_kws)
+    ok = hit  # 期望：被成功关键词识别，从而豁免防火墙
+    fails += 0 if ok else 1
+    print(f"{'✅' if ok else '❌'} [{desc}] 成功关键词{'命中(豁免)':8s} | {text[:26]!r}")
+
+print()
+print("=" * 66)
+total = len(inbound) + len(outbound) + len(success_cases)
 if fails == 0:
     print(f"🎉 全部 {total} 个用例通过")
 else:
