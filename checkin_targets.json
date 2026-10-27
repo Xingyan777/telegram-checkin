@@ -1,59 +1,68 @@
 [
   {
     "uid": "7622987039",
-    "cmd": "/checkin"
+    "cmd": "\/checkin"
   },
   {
     "uid": "8879780349",
-    "cmd": "/qd"
+    "cmd": "\/qd"
   },
   {
     "uid": "7520302449",
-    "cmd": "/qd"
+    "cmd": "\/qd"
   },
   {
     "uid": "8697196189",
-    "cmd": "/checkin"
+    "cmd": "\/checkin"
   },
   {
     "uid": "8251582055",
-    "cmd": "/qd"
+    "cmd": "\/qd"
   },
   {
     "uid": "8286060286",
-    "cmd": "/qd",
-    "sessions": ["四惠东"]
+    "cmd": "\/qd",
+    "sessions": [
+      "四惠东"
+    ]
   },
   {
     "uid": "8395686237",
-    "cmd": "/sign"
+    "cmd": "\/sign"
   },
   {
     "uid": "8543453092",
-    "cmd": "/sign"
+    "cmd": "\/sign"
   },
   {
     "uid": "8831207398",
-    "cmd": "/qd"
+    "cmd": "\/qd"
   },
   {
     "uid": "8915484989",
-    "cmd": "/sign"
+    "cmd": "\/sign"
   },
   {
     "uid": "8961805162",
-    "cmd": "/checkin"
+    "cmd": "\/checkin"
   },
-    {
-        "uid": "8814228345",
-        "cmd": "/checkin"
-    },
-    {
-        "uid": "6880480833",
-        "cmd": "/checkin"
-    },
-    {
-        "uid": "8707345304",
-        "cmd": "每日签到"
-    }
+  {
+    "uid": "8814228345",
+    "cmd": "\/checkin"
+  },
+  {
+    "uid": "6880480833",
+    "cmd": "\/checkin"
+  },
+  {
+    "uid": "8707345304",
+    "cmd": "每日签到"
+  },
+  {
+    "uid": "8806710989",
+    "cmd": "\/start",
+    "sessions": [
+      "新星焉"
+    ]
+  }
 ]
