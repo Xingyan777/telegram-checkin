@@ -28,9 +28,12 @@ pip3 install telethon
 ```bash
 # 在本地执行（从手机传到服务器）
 scp /storage/emulated/0/Download/tg_menu.py user@your-server:/home/user/telegram/
-scp /storage/emulated/0/Download/accounts_config.json user@your-server:/home/user/telegram/
-scp /storage/emulated/0/Download/checkin_targets.json user@your-server:/home/user/telegram/
+scp accounts_config.json user@your-server:/home/user/telegram/
+scp checkin_targets.json user@your-server:/home/user/telegram/
 scp *.session user@your-server:/home/user/telegram/
+
+# 说明：checkin_targets.json 和 *.session 都不在仓库里（已被 .gitignore 排除），
+# 从本地工作目录直接传，别从 git clone 出来的目录里找。
 
 # 或使用 SFTP 客户端上传
 ```
@@ -227,6 +230,7 @@ RUN pip install telethon
 COPY tg_menu.py /app/
 COPY tg_menu_daemon.py /app/
 COPY accounts_config.json /app/
+# checkin_targets.json 不在仓库里，构建前先放一份到构建上下文
 COPY checkin_targets.json /app/
 COPY *.session /app/
 

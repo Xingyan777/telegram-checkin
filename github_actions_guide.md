@@ -20,7 +20,8 @@
 3. 拖拽上传以下文件：
    - `tg_menu.py`
    - `accounts_config.json`
-   - `checkin_targets.json`
+   - `.github/workflows/checkin.yml`
+   （`checkin_targets.json` 不进仓库，内容放 `CHECKIN_TARGETS` secret）
    - 所有 `.session` 文件
 4. 点击 `Commit changes`
 
@@ -204,8 +205,9 @@ jobs:
 | `TG_API_ID` | Telegram API ID（在 my.telegram.org 申请） |
 | `TG_API_HASH` | Telegram API Hash |
 | `AI_API_KEY` | 人机验证所用大模型 API Key |
-| `SESSION_SIHUIDONG` | 四惠东账号的 StringSession |
-| `SESSION_XINXINGYAN` | 新星焉账号的 StringSession |
+| `SESSION_1` | 账号 1 的 StringSession |
+| `SESSION_2` | 账号 2 的 StringSession |
+| `CHECKIN_TARGETS` | 签到目标 JSON 数组（与本地 checkin_targets.json 同构） |
 
 `tg_menu.py` 中的读取方式：
 ```python
@@ -214,9 +216,12 @@ API_HASH = os.environ.get('TG_API_HASH', '')
 AI_VERIFY_KEY = os.environ.get('AI_API_KEY', '')
 ```
 
-`auto_run.py` 启动时会调用 `restore_sessions_from_env()`，
-把 `SESSION_<账号名>` 环境变量还原成同名的本地 `.session` 文件，
-再交给签到流程使用。环境变量名里的账号名需与 `accounts_config.json` 的键一致。
+`auto_run.py` 启动时先调用 `restore_sessions_from_env()`，把 `SESSION_*` 环境变量
+还原成同名的本地 `.session` 文件；再调用 `restore_targets_from_env()`，把
+`CHECKIN_TARGETS` 还原成 `checkin_targets.json`。
+
+`SESSION_` 后面的部分就是账号标识：`SESSION_1` → `1.session`，
+所以 `accounts_config.json` 的键和目标的 `sessions` 白名单都用 `1` / `2`。
 
 对应 `checkin.yml`：
 ```yaml
@@ -225,13 +230,15 @@ AI_VERIFY_KEY = os.environ.get('AI_API_KEY', '')
         TG_API_ID: ${{ secrets.TG_API_ID }}
         TG_API_HASH: ${{ secrets.TG_API_HASH }}
         AI_API_KEY: ${{ secrets.AI_API_KEY }}
-        SESSION_四惠东: ${{ secrets.SESSION_SIHUIDONG }}
-        SESSION_新星焉: ${{ secrets.SESSION_XINXINGYAN }}
+        SESSION_1: ${{ secrets.SESSION_1 }}
+        SESSION_2: ${{ secrets.SESSION_2 }}
+        CHECKIN_TARGETS: ${{ secrets.CHECKIN_TARGETS }}
       run: python auto_run.py
 ```
 
-> 注意：Secrets 名称不能含中文，因此用到的是 `SESSION_SIHUIDONG`，
-> 但注入到环境变量时用的是中文键 `SESSION_四惠东`，两者不要混淆。
+> 注意：`checkin_targets.json` 已从仓库移除并加入 `.gitignore`，
+> Actions 里完全靠 `CHECKIN_TARGETS` 还原。改目标必须同步更新这个 secret，
+> 否则远端还按旧列表跑。
 
 ## 十、故障排查
 
@@ -245,9 +252,9 @@ AI_VERIFY_KEY = os.environ.get('AI_API_KEY', '')
 - 确认 `auto_run.py` 中的导入路径正确
 
 ### 问题3：Session过期
-- Session文件有效期通常很长
-- 如果过期需要重新登录生成新的session文件
-- 将新session文件重新上传到仓库
+- Session 有效期通常很长，但改密码/踢设备会失效
+- 重新用 `python tg_menu.py` 登录，导出新的 StringSession
+- 更新对应的 `SESSION_1` / `SESSION_2` secret，**不要**往仓库传 `.session` 文件
 
 ### 问题4：签到失败
 - 查看Actions日志中的错误信息
@@ -257,8 +264,9 @@ AI_VERIFY_KEY = os.environ.get('AI_API_KEY', '')
 ### 问题5：重命名 session 文件后账号备注丢失/签到被跳过
 - 程序按 `.session` 文件名（去掉后缀）作为账号标识
 - 改名后必须同步：
-  - `accounts_config.json` 中的键名（`"星焉"` → `"四惠东"`）
-  - `checkin_targets.json` 中对应目标的 `sessions` 白名单（如 `"sessions": ["星焉"]` → `["四惠东"]`）
+  - `accounts_config.json` 中的键名
+  - 目标的 `sessions` 白名单（在 `checkin_targets.json` 和 `CHECKIN_TARGETS` secret 里各改一次）
+  - GitHub 上的 `SESSION_*` secret 名
 
 ## 十一、常见问题
 
@@ -266,7 +274,7 @@ AI_VERIFY_KEY = os.environ.get('AI_API_KEY', '')
 A: 不会，这是正常的自动化用途，符合GitHub使用条款。
 
 **Q: 可以签到多个账号吗？**
-A: 可以，只要所有账号的session文件都在仓库中。
+A: 可以，每个账号导出一个 StringSession，分别存成 `SESSION_1`、`SESSION_2`…即可。
 
 **Q: 可以修改签到频率吗？**
 A: 可以，修改cron表达式即可，但不建议过于频繁（避免被Telegram限流）。
