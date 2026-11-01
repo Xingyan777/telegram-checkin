@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 
 # ===== 凭证与密钥：严禁提交 =====
+checkin_targets.json
 *.session
 *.session-journal
 string_sessions.txt

@@ -15,7 +15,7 @@
 | 人机验证 | 自动识别验证题（图片题 / 文字题 / 找不同 / 算术题），交给 AI 判定后点击正确按钮或回复答案 |
 | 双层防火墙 | 入站只放行真正的验证题，出站拦截可疑答案，省 AI 额度、防误判 |
 | 两阶段执行 | 先批量发送所有签到命令，再统一处理验证回复，比逐个等待快得多 |
-| 无人值守 | GitHub Actions 每天定时跑，凭证走 Secrets，仓库里不落地 |
+| 无人值守 | GitHub Actions 每天定时跑，凭证与目标列表全部走 Secrets，仓库里不落地 |
 | 本地菜单 | 登录/备注/删除账号、增删改签到目标、手动一键签到、内置定时 worker |
 
 ---
@@ -25,7 +25,8 @@
 ```
 auto_run.py
    │
-   ├─ restore_sessions_from_env()   SESSION_<账号名> → 本地 .session
+   ├─ restore_sessions_from_env()   SESSION_* → 本地 .session
+   ├─ restore_targets_from_env()    CHECKIN_TARGETS → checkin_targets.json
    ├─ get_sessions()                扫描 *.session 得到账号列表
    │
    └─ do_checkin()
@@ -33,7 +34,7 @@ auto_run.py
          for 每个账号:
             │
             ├─ 阶段 1：批量发送
-            │     遍历 checkin_targets.json
+            │     遍历签到目标列表
             │     跳过 sessions 白名单不匹配的目标
             │     逐条发送命令，不等待回复
             │
@@ -52,6 +53,7 @@ auto_run.py
 - **验证处理最多 6 轮，每轮间隔 3 秒**，超时后放弃该目标，不影响其他目标。
 - **实体解析有兜底**：`get_entity()` 拿不到 `access_hash` 时，回退到 `iter_dialogs()` 扫描对话列表，所以「App 里建过会话但本地没缓存」的目标也能发出去。
 - **Telethon 版本锁定 `1.44.0`**：不锁版本时 Actions 可能装到其他版本，`getattr(button, 'data')` 取不到回调数据，导致验证分支误判。
+- **凭证与目标列表都不进仓库**：Actions 里由环境变量还原成文件，本地则直接用文件。
 
 ---
 
@@ -62,7 +64,7 @@ telegram-checkin/
 ├── tg_menu.py                 主程序（菜单 + 签到 + 验证 + 防火墙）
 ├── auto_run.py                GitHub Actions 入口（无交互，直接跑签到）
 ├── accounts_config.json       账号配置：备注名、手机号
-├── checkin_targets.json       签到目标：uid + 命令 + 可选账号白名单
+├── checkin_targets.json       签到目标（本地文件，已 gitignore，不进仓库）
 ├── .github/workflows/
 │   └── checkin.yml            每日定时工作流
 ├── test_firewall.py           防火墙规则自测
@@ -73,7 +75,7 @@ telegram-checkin/
 └── FREE_ALTERNATIVES.md       各种免费方案对比
 ```
 
-`.gitignore` 已排除 `*.session`、`string_sessions.txt`、`.env`，凭证不会进仓库。
+`.gitignore` 已排除 `*.session`、`string_sessions.txt`、`.env`、`checkin_targets.json`，凭证和目标列表都不会进仓库。
 
 ---
 
@@ -100,7 +102,7 @@ from telethon.sessions import StringSession
 
 API_ID = int(os.environ['TG_API_ID'])
 API_HASH = os.environ['TG_API_HASH']
-NAME = '四惠东'   # 你的 session 名
+NAME = '1'   # 你的 session 名
 
 async def main():
     client = TelegramClient(NAME, API_ID, API_HASH)
@@ -122,12 +124,28 @@ asyncio.run(main())
 | `TG_API_ID` | 从 [my.telegram.org](https://my.telegram.org) 获取的 api_id |
 | `TG_API_HASH` | 同上，api_hash |
 | `AI_API_KEY` | 验证题 AI 判定用的 API Key |
-| `SESSION_四惠东` | 上面导出的 StringSession（账号名要和本地一致） |
-| `SESSION_新星焉` | 同上 |
+| `SESSION_1` | 账号 1 的 StringSession |
+| `SESSION_2` | 账号 2 的 StringSession |
+| `CHECKIN_TARGETS` | 签到目标 JSON 数组（格式见下节） |
 
-> 账号名用中文没问题，`SESSION_` 后面的部分会被当成 session 文件名还原。
+> `SESSION_` 后面的部分会被当成 session 文件名。`SESSION_1` 还原出 `1.session`，
+> 所以 `accounts_config.json` 的键和目标的 `sessions` 白名单里都要写 `1`。
 
-### 4. 上传代码
+### 4. 配置签到目标
+
+`CHECKIN_TARGETS` 的值就是一个 JSON 数组，和本地 `checkin_targets.json` 内容完全一致：
+
+```json
+[
+  { "uid": "7622987039", "cmd": "/checkin" },
+  { "uid": "8286060286", "cmd": "/qd", "sessions": ["1"] },
+  { "uid": "9131741740", "cmd": "/checkin", "sessions": ["2"] }
+]
+```
+
+改完目标记得同步更新这个 secret，否则 Actions 还按旧列表跑。
+
+### 5. 上传代码
 
 ```bash
 git add -A
@@ -135,9 +153,9 @@ git commit -m "init"
 git push
 ```
 
-`.session` 文件不会被提交（已被 `.gitignore` 排除），这是预期行为。
+`.session` 和 `checkin_targets.json` 都不会被提交（已被 `.gitignore` 排除），这是预期行为。
 
-### 5. 启用工作流
+### 6. 启用工作流
 
 仓库 → `Actions` → 选中 `Telegram Auto Checkin` → `Enable workflow` → `Run workflow` 手动跑一次验证。
 
@@ -178,6 +196,14 @@ python tg_menu.py
 0. 返回
 ```
 
+本地也可以只放环境变量跑，不建文件：
+
+```bash
+export SESSION_1="1BVtsOK..."
+export CHECKIN_TARGETS='[{"uid":"7622987039","cmd":"/checkin"}]'
+python auto_run.py
+```
+
 ---
 
 ## 配置文件
@@ -186,14 +212,14 @@ python tg_menu.py
 
 ```json
 {
-  "四惠东": { "remark": "四惠东", "phone": "+8613800000000" },
-  "新星焉": { "remark": "新星焉" }
+  "1": { "remark": "四惠东", "phone": "+8613800000000" },
+  "2": { "remark": "新星焉" }
 }
 ```
 
 键名必须与 `.session` 文件名（去后缀）一致，否则备注丢失。
 
-### checkin_targets.json
+### checkin_targets.json（不进仓库）
 
 ```json
 [
@@ -209,7 +235,8 @@ python tg_menu.py
 | `cmd` | 是 | 发送的内容，可以是命令也可以是一段文字 |
 | `sessions` | 否 | 账号白名单。省略 = 所有账号都发；给了 = 只有列出的账号发 |
 
-> **重命名 session 文件时**，必须同步改 `accounts_config.json` 的键名和 `checkin_targets.json` 里的 `sessions` 白名单，否则备注丢失、白名单匹配失败导致跳过签到。
+> **重命名 session 文件时**，必须同步改 `accounts_config.json` 的键名、目标的 `sessions` 白名单，
+> 以及 GitHub 上的 `SESSION_*` secret 名，否则备注丢失、白名单匹配失败导致跳过签到。
 
 ---
 
@@ -251,7 +278,15 @@ export FIREWALL_DENY_KEYWORDS="严格验证,无需验证,今日已领取"
 ## 常见问题
 
 **Q：Actions 里报「未发现任何账号」**
-`SESSION_<账号名>` 没配，或配了但值为空。注意账号名要和本地 `.session` 文件名完全一致。
+`SESSION_*` 没配，或配了但值为空。注意 `SESSION_1` 会还原成 `1.session`，账号名就是 `1`。
+
+**Q：Actions 里报「请先添加签到目标」**
+`CHECKIN_TARGETS` 没配，或值不是合法 JSON 数组。可以先在本地验证格式：
+`python -c "import json;json.load(open('checkin_targets.json'))"`。
+
+**Q：改了目标列表但 Actions 没变化**
+`checkin_targets.json` 已不在仓库里，改本地文件不会自动同步。要更新 `CHECKIN_TARGETS` secret，
+或本地跑 `gh secret set CHECKIN_TARGETS < checkin_targets.json`。
 
 **Q：验证按钮点了报 `message ID is invalid`**
 消息已过期或被机器人删除。程序会重发签到命令再试，通常能补上；如果反复出现，说明该机器人的验证时效很短。
@@ -273,7 +308,7 @@ GitHub 的 `schedule` 在高负载时会延迟，最长可能一小时。要求�
 ## 安全须知
 
 1. **`.session` 文件等于账号登录态**，泄露即等于账号被盗。永远不要提交，不要发群里，不要放公开网盘。
-2. **优先用私有仓库**。仓库为 Public 时 `checkin_targets.json` 里的机器人 ID 是公开可见的（虽然不含凭证）。
+2. **仓库为 Public 时，代码和文档公开可见**。凭证与签到目标已全部移入 Secrets，仓库里不含任何 session 或目标列表；但代码本身是公开的。
 3. **凭证只放 Secrets**，不要写进代码、不要 `echo` 到日志。
 4. **PAT 用最小权限**。只需要 `repo` 就能读写代码和 Secrets；要手动触发 Actions 或改 workflow 文件才需要额外的 `workflow`。
 5. **定期轮换**。session 和 API Key 换掉旧的就失效，出过事的立刻重登。
@@ -293,6 +328,12 @@ GitHub 的 `schedule` 在高负载时会延迟，最长可能一小时。要求�
 ---
 
 ## 更新日志
+
+### v1.3
+- 🔐 签到目标移入 `CHECKIN_TARGETS` secret，`checkin_targets.json` 从仓库移除并加入 `.gitignore`
+- 🔑 session secret 改为 `SESSION_1` / `SESSION_2`，`accounts_config.json` 键名与白名单同步为 `1` / `2`
+- ⚙️ 新增 `restore_targets_from_env()`，Actions 启动时从环境变量还原目标列表
+- 📝 README 同步更新
 
 ### v1.2
 - 📝 README 重写：补齐工作原理、StringSession 导出流程、配置字段说明、安全须知

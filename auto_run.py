@@ -21,10 +21,13 @@ async def auto_checkin():
     
     try:
         # 从主程序导入签到函数
-        from tg_menu import do_checkin, restore_sessions_from_env, get_sessions
+        from tg_menu import do_checkin, restore_sessions_from_env, restore_targets_from_env, get_sessions
 
         # 先从环境变量还原 StringSession 为本地 .session 文件
         restore_sessions_from_env()
+
+        # 再从环境变量还原签到目标（仓库内不落地 checkin_targets.json）
+        restore_targets_from_env()
 
         sessions = get_sessions()
         if not sessions:

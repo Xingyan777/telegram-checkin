@@ -214,6 +214,30 @@ def restore_sessions_from_env():
     return restored
 
 
+def restore_targets_from_env():
+    """从环境变量还原签到目标列表（用于 GitHub Actions 等仓库内不放目标文件的环境）。
+
+    约定环境变量名：CHECKIN_TARGETS，值为 JSON 数组（与 checkin_targets.json 同构）。
+    已存在 checkin_targets.json 时不覆盖，避免踩掉本地维护的版本。
+    """
+    raw = os.environ.get('CHECKIN_TARGETS', '').strip()
+    if not raw:
+        return []
+    if os.path.exists(CHECKIN_FILE):
+        return []
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, list):
+            raise ValueError('CHECKIN_TARGETS must be a JSON array')
+        with open(CHECKIN_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f'\U0001f511 已从环境变量还原 {len(data)} 个签到目标')
+        return data
+    except Exception as e:
+        print(f'\u26a0\ufe0f 还原签到目标失败: {e}')
+        return []
+
+
 def get_sessions():
     try:
         return sorted([f[:-8] for f in os.listdir('.') if f.endswith('.session') and os.path.isfile(f)])
