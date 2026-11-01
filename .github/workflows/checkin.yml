@@ -26,6 +26,7 @@ jobs:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
-          SESSION_四惠东: ${{ secrets.SESSION_SIHUIDONG }}
-          SESSION_新星焉: ${{ secrets.SESSION_XINXINGYAN }}
+          SESSION_1: ${{ secrets.SESSION_1 }}
+          SESSION_2: ${{ secrets.SESSION_2 }}
+          CHECKIN_TARGETS: ${{ secrets.CHECKIN_TARGETS }}
         run: python auto_run.py
