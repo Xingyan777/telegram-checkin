@@ -1,308 +1,312 @@
-# Telegram自动签到 - 部署方案完整指南
+# Telegram 多账号自动签到
 
-## 📚 文档索引
-
-| 文档 | 说明 | 适合人群 |
-|------|------|---------|
-| **QUICK_START.md** | GitHub Actions快速开始（推荐） | 所有用户 |
-| **github_actions_guide.md** | GitHub Actions详细教程 | 需要详细步骤的用户 |
-| **FREE_ALTERNATIVES.md** | 所有免费方案对比 | 想了解多种选择的用户 |
-| **deploy_guide.md** | 服务器部署指南（需SSH） | 有VPS的用户 |
+基于 [Telethon](https://github.com/LonamiWebs/Telethon) 的多账号 Telegram 签到管理器。
+支持多账号、多目标、人机验证自动作答、双层关键词防火墙，可在 GitHub Actions 上每日无人值守运行，也可在本地用交互式菜单手动操作。
 
 ---
 
-## 🎯 快速决策
+## 特性
 
-### 我没有信用卡 ➜ 用 GitHub Actions
-- ✅ 完全免费
-- ✅ 无需服务器
-- ✅ 自动化运行
-- 📖 查看：`QUICK_START.md`
-
-### 我有云服务器 ➜ 用 systemd 服务
-- ✅ 稳定可靠
-- ✅ 完全掌控
-- ✅ 无时间限制
-- 📖 查看：`deploy_guide.md`
-
-### 我有树莓派/NAS ➜ 本地部署
-- ✅ 低功耗
-- ✅ 长期运行
-- ✅ 一次投资
-- 📖 查看：`FREE_ALTERNATIVES.md` → 方案四
-
-### 我想简单点 ➜ 本地电脑运行
-- ✅ 最简单
-- ❌ 需要24小时开机
-- 📖 查看：`FREE_ALTERNATIVES.md` → 方案三
+| 能力 | 说明 |
+|------|------|
+| 多账号 | 一个 `.session` 文件即一个账号，数量不限，支持备注名 |
+| 多目标 | 每个签到目标可配置独立命令（`/checkin`、`/qd`、`/sign`、`每日签到`…） |
+| 按账号分发 | 目标可指定 `sessions` 白名单，只让指定账号发送，避免所有账号都去骚扰同一个机器人 |
+| 人机验证 | 自动识别验证题（图片题 / 文字题 / 找不同 / 算术题），交给 AI 判定后点击正确按钮或回复答案 |
+| 双层防火墙 | 入站只放行真正的验证题，出站拦截可疑答案，省 AI 额度、防误判 |
+| 两阶段执行 | 先批量发送所有签到命令，再统一处理验证回复，比逐个等待快得多 |
+| 无人值守 | GitHub Actions 每天定时跑，凭证走 Secrets，仓库里不落地 |
+| 本地菜单 | 登录/备注/删除账号、增删改签到目标、手动一键签到、内置定时 worker |
 
 ---
 
-## 📦 所需文件清单
+## 工作原理
 
-### 核心文件（必需）
 ```
-✅ tg_menu.py           - 主程序
-✅ accounts_config.json  - 账号配置
-✅ checkin_targets.json  - 签到目标
-✅ *.session            - 账号session文件
-```
-
-### GitHub Actions专用（推荐方案）
-```
-✅ auto_run.py                      - 自动运行入口
-✅ .github/workflows/checkin.yml    - 工作流配置
+auto_run.py
+   │
+   ├─ restore_sessions_from_env()   SESSION_<账号名> → 本地 .session
+   ├─ get_sessions()                扫描 *.session 得到账号列表
+   │
+   └─ do_checkin()
+         │
+         for 每个账号:
+            │
+            ├─ 阶段 1：批量发送
+            │     遍历 checkin_targets.json
+            │     跳过 sessions 白名单不匹配的目标
+            │     逐条发送命令，不等待回复
+            │
+            └─ 阶段 2：统一处理验证
+                  handle_verification()
+                     │
+                     ├─ 入站防火墙 verify_firewall()  不是验证题 → 丢弃
+                     ├─ AI 判定 ai_ask_verification()  返回应点按钮序号/答案
+                     ├─ 出站防火墙 answer_firewall()   答案可疑 → 丢弃
+                     ├─ click_button()                 点击回调按钮
+                     └─ 命中成功关键词 → 记为签到成功
 ```
 
-### 服务器部署专用
-```
-📄 tg-checkin.service   - systemd服务配置
-```
+关键点：
+
+- **验证处理最多 6 轮，每轮间隔 3 秒**，超时后放弃该目标，不影响其他目标。
+- **实体解析有兜底**：`get_entity()` 拿不到 `access_hash` 时，回退到 `iter_dialogs()` 扫描对话列表，所以「App 里建过会话但本地没缓存」的目标也能发出去。
+- **Telethon 版本锁定 `1.44.0`**：不锁版本时 Actions 可能装到其他版本，`getattr(button, 'data')` 取不到回调数据，导致验证分支误判。
 
 ---
 
-## 🚀 三分钟快速开始（GitHub Actions）
+## 目录结构
 
-### 步骤1：注册GitHub
-访问 https://github.com 注册账号（免费）
-
-### 步骤2：创建仓库
-1. 点击 `+` → `New repository`
-2. 名称：`telegram-checkin`
-3. 勾选 `Private`（私有）
-4. 点击创建
-
-### 步骤3：上传文件
-拖拽上传以下文件到仓库：
-- `tg_menu.py`
-- `auto_run.py`
-- `accounts_config.json`
-- `checkin_targets.json`
-- 所有 `.session` 文件
-
-### 步骤4：创建工作流
-1. 点击 `Add file` → `Create new file`
-2. 文件名：`.github/workflows/checkin.yml`
-3. 复制粘贴这段代码：
-
-```yaml
-name: Telegram Auto Checkin
-on:
-  schedule:
-    - cron: '0 1 * * *'  # 每天北京时间9点
-  workflow_dispatch:
-jobs:
-  checkin:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    - run: pip install telethon
-    - run: python auto_run.py
-    - run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add *.session
-        git diff --quiet && git diff --staged --quiet || git commit -m "Update"
-        git push || echo "No changes"
+```
+telegram-checkin/
+├── tg_menu.py                 主程序（菜单 + 签到 + 验证 + 防火墙）
+├── auto_run.py                GitHub Actions 入口（无交互，直接跑签到）
+├── accounts_config.json       账号配置：备注名、手机号
+├── checkin_targets.json       签到目标：uid + 命令 + 可选账号白名单
+├── .github/workflows/
+│   └── checkin.yml            每日定时工作流
+├── test_firewall.py           防火墙规则自测
+├── FIREWALL.md                防火墙设计说明
+├── QUICK_START.md             快速部署
+├── github_actions_guide.md    Actions 详细教程
+├── deploy_guide.md            VPS / systemd / Docker 部署
+└── FREE_ALTERNATIVES.md       各种免费方案对比
 ```
 
-### 步骤5：启用并测试
-1. 进入 `Actions` 标签
-2. 点击 `Enable workflow`
-3. 点击 `Run workflow` 测试
-
-**✅ 完成！** 现在每天会自动签到。
+`.gitignore` 已排除 `*.session`、`string_sessions.txt`、`.env`，凭证不会进仓库。
 
 ---
 
-## 🔧 常见问题
+## 快速开始（GitHub Actions，推荐）
 
-### Q1: GitHub Actions什么时候运行？
-**A:** 默认每天北京时间9点。可以修改 `cron` 表达式改变时间。
+### 1. 准备本地账号
 
-### Q2: 如何修改签到时间？
-**A:** 编辑 `.github/workflows/checkin.yml`，修改这一行：
-```yaml
-- cron: '0 1 * * *'  # UTC 1点 = 北京时间 9点
+```bash
+pip install telethon==1.44.0
+python tg_menu.py
 ```
 
-常用时间：
-- 北京时间 6点：`'0 22 * * *'`
-- 北京时间 12点：`'0 4 * * *'`
-- 北京时间 18点：`'0 10 * * *'`
-- 北京时间 22点：`'0 14 * * *'`
+选 `2. 登录新账号`，输入 session 名（英文数字）、备注、手机号、验证码，需要两步验证时再输密码。登录成功后目录下会出现 `<名字>.session`。
 
-### Q3: 会不会用完免费额度？
-**A:** 不会。GitHub免费提供每月2000分钟，每天运行一次只需5分钟，一个月才150分钟。
+### 2. 导出 StringSession 字符串
 
-### Q4: Session文件安全吗？
-**A:** 只要仓库设置为Private（私有），就是安全的。不要设置为Public（公开）。
+GitHub Actions 没有你的本地 session 文件，需要把登录态转成字符串存进 Secrets。新建一个临时脚本运行：
 
-### Q5: 可以签到多个账号吗？
-**A:** 可以。只要把所有账号的session文件都上传到仓库。
+```python
+# export_session.py —— 用完即删，别提交
+import asyncio, os
+from telethon import TelegramClient
+from telethon.sessions import StringSession
 
-### Q5.5: 重命名 session 文件后需要注意什么？
-**A:** 程序通过 `.session` 文件名（去掉后缀）识别账号，所以：
-1. 如果重命名了 session 文件（如 `星焉.session` → `四惠东.session`），必须同步修改 `accounts_config.json` 里的键名和 `checkin_targets.json` 里对应目标的 `sessions` 白名单，否则账号备注会丢失、白名单匹配会失效（签到被跳过）。
-2. 本地已登录的 session 若被 Git 改动挡住，先处理本地未提交的 session 变更，避免覆盖登录态。
+API_ID = int(os.environ['TG_API_ID'])
+API_HASH = os.environ['TG_API_HASH']
+NAME = '四惠东'   # 你的 session 名
 
-### Q6: 如果签到失败怎么办？
-**A:** 进入 Actions 查看日志，会显示具体错误信息。
+async def main():
+    client = TelegramClient(NAME, API_ID, API_HASH)
+    await client.connect()
+    print(StringSession.save(client.session))
+    await client.disconnect()
 
-### Q7: 如何停止自动签到？
-**A:** 在 Actions 页面，点击工作流的 `...` → `Disable workflow`
+asyncio.run(main())
+```
 
-### Q8: 我有VPS但没有信用卡，能用吗？
-**A:** 可以。查看 `deploy_guide.md` 使用systemd方案。
+输出的那一长串就是该账号的 StringSession。
 
-### Q9: 国内服务器能用吗？
-**A:** 可以，但需要配置代理才能访问Telegram。详见 `FREE_ALTERNATIVES.md`。
+### 3. 配置仓库 Secrets
 
-### Q10: 手机能当服务器吗？
-**A:** 可以。使用Termux在Android手机上运行。详见 `FREE_ALTERNATIVES.md` 方案六。
+仓库 → `Settings` → `Secrets and variables` → `Actions` → `New repository secret`：
 
----
+| Secret 名 | 值 |
+|-----------|-----|
+| `TG_API_ID` | 从 [my.telegram.org](https://my.telegram.org) 获取的 api_id |
+| `TG_API_HASH` | 同上，api_hash |
+| `AI_API_KEY` | 验证题 AI 判定用的 API Key |
+| `SESSION_四惠东` | 上面导出的 StringSession（账号名要和本地一致） |
+| `SESSION_新星焉` | 同上 |
 
-## 💡 方案对比速查表
+> 账号名用中文没问题，`SESSION_` 后面的部分会被当成 session 文件名还原。
 
-| 特性 | GitHub Actions | VPS服务器 | 树莓派 | 本地电脑 |
-|------|---------------|----------|--------|---------|
-| **费用** | 免费 | $5/月起 | 200元一次性 | 免费 |
-| **需要信用卡** | ❌ | ✅ | ❌ | ❌ |
-| **难度** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | ⭐ |
-| **稳定性** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |
-| **维护成本** | 无 | 低 | 低 | 无 |
-| **功耗** | 0 | 5-10W | 5-10W | 100-300W |
-| **推荐度** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+### 4. 上传代码
 
----
+```bash
+git add -A
+git commit -m "init"
+git push
+```
 
-## 📖 详细文档说明
+`.session` 文件不会被提交（已被 `.gitignore` 排除），这是预期行为。
 
-### QUICK_START.md
-**快速开始指南 - GitHub Actions部署**
-- 三步完成部署
-- 适合新手
-- 有完整的步骤截图说明
-- 5分钟即可完成
+### 5. 启用工作流
 
-### github_actions_guide.md
-**GitHub Actions详细教程**
-- 完整的配置说明
-- 高级功能配置
-- 故障排查指南
-- 适合想深入了解的用户
+仓库 → `Actions` → 选中 `Telegram Auto Checkin` → `Enable workflow` → `Run workflow` 手动跑一次验证。
 
-### FREE_ALTERNATIVES.md
-**免费方案完整对比**
-- 6种免费/低成本方案
-- 详细的优劣对比
-- 适合各种场景的用户
-- 包含Termux、树莓派等方案
-
-### deploy_guide.md
-**服务器部署指南**
-- systemd服务配置
-- screen/tmux方案
-- Docker容器化部署
-- 适合有VPS的用户
+默认 cron 是 `0 1 * * *`（UTC 1 点 = 北京时间 9 点）。GitHub 的定时任务有排队延迟，实际启动时间可能晚 10 分钟到 1 小时不等。
 
 ---
 
-## 🎓 推荐学习路径
+## 本地使用
 
-### 新手用户
-1. 先看 `QUICK_START.md` 了解基本流程
-2. 按照步骤部署 GitHub Actions
-3. 遇到问题查看 `github_actions_guide.md` 的故障排查
+```bash
+export TG_API_ID=1234567
+export TG_API_HASH=abcdef0123456789abcdef0123456789
+export AI_API_KEY=sk-xxxx
+python tg_menu.py
+```
 
-### 进阶用户
-1. 先看 `FREE_ALTERNATIVES.md` 对比各种方案
-2. 选择适合自己的方案
-3. 查看对应的详细文档
+主菜单：
 
-### 专业用户
-1. 直接看 `deploy_guide.md`
-2. 使用 systemd 或 Docker 方案
-3. 自定义配置和监控
+```
+1. 查看账号列表        列出所有 .session 及其备注
+2. 登录新账号          手机号 + 验证码登录，自动存备注
+3. 修改账号备注        只改显示名，不动 session
+4. 删除账号            三重确认，会删掉登录凭证
+5. 签到管理            目标增删改查 + 一键签到
+6. 执行一键签到        立即跑一次全部账号
+7. 自动签到管理        内置定时 worker，可设间隔
+0. 退出
+```
 
----
+签到管理子菜单：
 
-## 🔐 安全建议
-
-1. **务必使用私有仓库**
-   - Session文件包含账号凭证
-   - 泄露会导致账号被盗
-
-2. **定期更新依赖**
-   ```bash
-   pip install --upgrade telethon
-   ```
-
-3. **备份重要文件**
-   - Session文件
-   - 配置文件
-   - 签到目标
-
-4. **使用GitHub Secrets**
-   - 不要在代码中硬编码API密钥
-   - 使用环境变量存储敏感信息
-
-5. **监控运行日志**
-   - 定期查看Actions日志
-   - 及时发现异常
+```
+1. 查看签到目标列表
+2. 添加签到目标        输入 uid 或 @username + 命令
+3. 编辑签到目标
+4. 删除签到目标
+5. 执行一键签到
+0. 返回
+```
 
 ---
 
-## 📞 获取帮助
+## 配置文件
 
-### 查看日志
-- GitHub Actions: 进入 Actions → 点击运行记录
-- 服务器: `sudo journalctl -u tg-checkin -f`
+### accounts_config.json
 
-### 常见错误
-1. **导入失败**: 检查文件是否都已上传
-2. **签到失败**: 检查session文件是否有效
-3. **工作流不运行**: 检查是否启用了Actions
+```json
+{
+  "四惠东": { "remark": "四惠东", "phone": "+8613800000000" },
+  "新星焉": { "remark": "新星焉" }
+}
+```
 
-### 联系支持
-- 查看项目文档
-- 提交GitHub Issue
-- 查看社区讨论
+键名必须与 `.session` 文件名（去后缀）一致，否则备注丢失。
+
+### checkin_targets.json
+
+```json
+[
+  { "uid": "7622987039", "cmd": "/checkin" },
+  { "uid": "8286060286", "cmd": "/qd", "sessions": ["四惠东"] },
+  { "uid": "9131741740", "cmd": "/checkin", "sessions": ["新星焉"] }
+]
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `uid` | 是 | 数字 ID 或 `@username` |
+| `cmd` | 是 | 发送的内容，可以是命令也可以是一段文字 |
+| `sessions` | 否 | 账号白名单。省略 = 所有账号都发；给了 = 只有列出的账号发 |
+
+> **重命名 session 文件时**，必须同步改 `accounts_config.json` 的键名和 `checkin_targets.json` 里的 `sessions` 白名单，否则备注丢失、白名单匹配失败导致跳过签到。
 
 ---
 
-## 📝 更新日志
+## 人机验证与防火墙
+
+签到机器人常见的验证形态：图片选序号、点唯一不同的按钮、算术题、滑动验证。程序把消息和图片一起交给 AI，AI 返回应点击的按钮序号或回复内容。
+
+为了不把每条无关消息都丢给 AI（烧额度 + 误判），加了两道关键词防火墙：
+
+```
+机器人回复
+    │
+    ▼
+入站防火墙 verify_firewall()
+    反向关键词命中  → 拦截（宣传文案里带"验证"二字的情况）
+    正向关键词未命中 → 拦截
+    两者都过        → 放行给 AI
+    │
+    ▼
+AI 判定
+    │
+    ▼
+出站防火墙 answer_firewall()
+    过长 / 含换行 / 含链接 / 含反向词 → 拦截
+    其余                              → 允许发送
+```
+
+关键词表可用环境变量覆盖（逗号或换行分隔）：
+
+```bash
+export FIREWALL_VERIFY_KEYWORDS="验证,请选择,请点击,找不同,序号"
+export FIREWALL_DENY_KEYWORDS="严格验证,无需验证,今日已领取"
+```
+
+详见 [FIREWALL.md](FIREWALL.md)，规则自测：`python test_firewall.py`。
+
+---
+
+## 常见问题
+
+**Q：Actions 里报「未发现任何账号」**
+`SESSION_<账号名>` 没配，或配了但值为空。注意账号名要和本地 `.session` 文件名完全一致。
+
+**Q：验证按钮点了报 `message ID is invalid`**
+消息已过期或被机器人删除。程序会重发签到命令再试，通常能补上；如果反复出现，说明该机器人的验证时效很短。
+
+**Q：某个目标一直签到失败**
+先用 `python tg_menu.py` 本地跑一次看日志。常见原因：session 失效需要重新登录、目标拉黑了该账号、命令改了（`/qd` 变成 `/sign` 之类）。
+
+**Q：定时任务没按点跑**
+GitHub 的 `schedule` 在高负载时会延迟，最长可能一小时。要求准点的话用 VPS + systemd，见 [deploy_guide.md](deploy_guide.md)。
+
+**Q：会不会用完 Actions 免费额度**
+公共仓库免费无限；私有仓库每月 2000 分钟，一次签到约 4 分钟，一个月 120 分钟左右。
+
+**Q：能加多少个账号**
+理论上不限，但所有账号串行执行，每多一个账号多几秒到几十秒。目前 2 个账号单次约 4 分钟。
+
+---
+
+## 安全须知
+
+1. **`.session` 文件等于账号登录态**，泄露即等于账号被盗。永远不要提交，不要发群里，不要放公开网盘。
+2. **优先用私有仓库**。仓库为 Public 时 `checkin_targets.json` 里的机器人 ID 是公开可见的（虽然不含凭证）。
+3. **凭证只放 Secrets**，不要写进代码、不要 `echo` 到日志。
+4. **PAT 用最小权限**。只需要 `repo` 就能读写代码和 Secrets；要手动触发 Actions 或改 workflow 文件才需要额外的 `workflow`。
+5. **定期轮换**。session 和 API Key 换掉旧的就失效，出过事的立刻重登。
+
+---
+
+## 相关文档
+
+| 文档 | 内容 |
+|------|------|
+| [QUICK_START.md](QUICK_START.md) | 最短路径部署 GitHub Actions |
+| [github_actions_guide.md](github_actions_guide.md) | Actions 配置细节与排错 |
+| [deploy_guide.md](deploy_guide.md) | VPS / systemd / Docker 部署 |
+| [FREE_ALTERNATIVES.md](FREE_ALTERNATIVES.md) | 六种免费或低成本方案对比 |
+| [FIREWALL.md](FIREWALL.md) | 关键词防火墙设计 |
+
+---
+
+## 更新日志
+
+### v1.2
+- 📝 README 重写：补齐工作原理、StringSession 导出流程、配置字段说明、安全须知
+- 🔒 文档明确凭证边界与最小权限建议
 
 ### v1.1
-- 🔄 账号 session 改名适配：`星焉.session` → `四惠东.session`
-- ✅ `accounts_config.json` 账号键、`checkin_targets.json` 白名单同步为 `四惠东`
-- ✅ 支持向 Telegram 个人频道（Channel）发送消息（实体需通过 `iter_dialogs` 解析）
+- 🔄 session 改名适配：`星焉.session` → `四惠东.session`
+- ✅ `accounts_config.json` 键名与 `checkin_targets.json` 白名单同步
+- ✅ 支持向 Telegram 个人频道发送消息（实体经 `iter_dialogs` 解析）
 
 ### v1.0
 - ✅ 命令行菜单界面
 - ✅ 多账号管理
-- ✅ 签到目标管理
-- ✅ 24小时自动签到
-- ✅ GitHub Actions支持
-- ✅ 服务器部署支持
-
----
-
-## 🎉 总结
-
-**对于大多数用户，我们强烈推荐使用 GitHub Actions 方案：**
-
-- ✅ 完全免费
-- ✅ 无需信用卡
-- ✅ 无需服务器
-- ✅ 自动化运行
-- ✅ 稳定可靠
-- ✅ 易于维护
-
-**立即开始：** 查看 `QUICK_START.md`
-
-**祝你使用愉快！🎊**
+- ✅ 批量签到
+- ✅ 人机验证 AI 判定
+- ✅ 关键词防火墙
+- ✅ GitHub Actions 无人值守
